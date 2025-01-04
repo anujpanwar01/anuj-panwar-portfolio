@@ -1,0 +1,88 @@
+name: "Build Portfolio"
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 12.17.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.17.0
+      - name: Cache npm packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm i
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: npm run build
+
+      - name: Update or Create Build Status Comment
+        uses: actions/github-script@v5
+        env:
+          BUILD_STATUS: ${{ steps.build.outcome }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issueNumber = context.issue.number;
+
+            // Get the current commit hash and create a link to it
+            const commitHash = context.sha;
+            const commitLink = `https://github.com/${owner}/${repo}/commit/${commitHash}`;
+
+            // Get the current timestamp
+            const buildTimestamp = new Date().toISOString();
+
+            // Retrieve existing comments
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: issueNumber
+            });
+
+            // Define build status message
+            const buildStatus = process.env.BUILD_STATUS === 'success' 
+              ? 'Build Status: ✅ succeeded!' 
+              : 'Build Status: ❌ failed. Please check the logs for more details.';
+
+            const buildMessage = `${buildStatus}\n\n**Commit:** [\`${commitHash}\`](${commitLink})\n**Build Time:** ${buildTimestamp}`;
+
+            // Update or create a comment
+            const buildStatusComment = comments.find(comment => 
+              comment.body.includes('Build Status: ✅ succeeded!') || 
+              comment.body.includes('Build Status: ❌ failed.')
+            );
+
+            if (buildStatusComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: buildStatusComment.id,
+                body: buildMessage
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: buildMessage
+              });
+            }
+
+      - name: Fail if Build Failed
+        if: steps.build.outcome != 'success'
+        run: exit 1
